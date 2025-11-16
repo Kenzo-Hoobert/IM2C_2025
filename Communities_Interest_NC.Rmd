@@ -1,0 +1,1239 @@
+
+---
+title: "Communities of Interest (N.C.)"
+author: "Riddhik Basu, Kenzo Huberts, Alice Zhong"
+date: "2025-11-14"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    toc: true
+---
+
+
+
+# Data Management:
+
+## Packages and Data Installation
+
+
+Prior to even looking at our problem.. 
+
+We first set up our computing environment, including the file pathway, and required libraries, packages and dependencies which we may need.
+
+
+
+```{r Data Load, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+#Import / Install packages
+packages.list <- c("readr", "tidyr", "haven", "readxl", "ggplot2", "gt",
+                   "gtsummary", "labelled", "MASS", "brant", "corrplot",
+                   "reshape2", "Hmisc", "dplyr", "car", "viridis", "sp",
+                   "geoR", "maps", "fields", "mvtnorm", "spmodel", "sf",
+                   "spData", "spdep", "spatialreg", "spmodel")
+
+
+
+vapply(packages.list, library, logical(1), logical.return = TRUE, character.only = TRUE)
+
+#setting directory
+setwd("C:/University/Comps/IMMC_25")
+
+```
+
+
+# Loading NC Map and Counties
+
+```{r}
+
+library(sf)
+library(spdep)
+library(spatialreg)
+library(spmodel)
+
+## Load in the demographic data and county data for North Carolina
+ncdata <- read.csv("Final2_NC_County_2024_data.csv",header=T)
+load("nc_counties.Rdata")
+
+## Plot the counties
+plot(nc_counties)
+ 
+## Names of the counties
+nc_counties[[7]]
+ 
+## Obtain neighborhoods given the polygons
+nc_neigh = poly2nb(nc_counties)
+
+```
+
+
+```{r}
+
+nc_counties_sf <- st_as_sf(nc_counties)
+nc_counties_sf$ge
+
+```
+
+
+
+```{r}
+
+centroids <- st_coordinates(st_centroid(nc_counties_sf$geometry))
+
+#Label each neighborhood with their indices(POLYID)
+ggplot(nc_counties_sf) +
+  geom_sf()+
+  geom_label(aes( x=centroids[,1], y=centroids[,2], label=NAME_2), size=2) +
+  theme_bw() + ggtitle("County by Locations")
+
+```
+
+
+
+```{r}
+
+coords <- st_centroid(st_geometry(nc_counties_sf), of_largest_polygon=TRUE)
+
+
+plot(nc_counties, border = "black")
+
+plot(nc_neigh, coords, add=TRUE)
+
+```
+
+
+
+```{r}
+
+ind <- nc_counties_sf$NAME_2
+
+# Second plot: Nearest neighbors (k=2)
+col.knn <- knearneigh(coords, k=2)
+col.knn.nb <- knn2nb(col.knn, row.names=ind)
+
+#plot(st_geometry(boston_sf), border="darkgrey", axes=FALSE)
+#plot(col.knn.nb, coords, add=TRUE)
+
+
+plot(nc_counties, border = "black", axes=FALSE)
+
+plot(col.knn.nb, coords, add=TRUE)
+
+
+```
+
+
+# Data Clean
+
+
+
+```{r}
+
+df <- ncdata
+
+# Ensure the 'County' column remains character/factor
+df$County <- as.character(df$County)
+
+# Identify all columns *excluding* "County"
+cols_to_clean <- names(df)[!(names(df) %in% "County")]
+
+# Apply a cleaning function to remove non-numeric characters and then convert to numeric
+df[, cols_to_clean] <- lapply(df[, cols_to_clean], function(x) {
+    # 1. Convert to character to enable string replacement
+    x_char <- as.character(x)
+    
+    # 2. Remove commas, dollar signs, and percent signs
+    x_cleaned <- gsub("[$,%]", "", x_char)
+    x_cleaned <- gsub(",", "", x_cleaned) # Redundant but safe
+    
+    # 3. Convert the cleaned string to numeric, coercing any remaining errors to NA
+    return(as.numeric(x_cleaned))
+})
+
+# Check structure to verify conversion and spot any new NAs created
+str(df)
+```
+
+
+
+# PCA
+
+
+
+```{r}
+
+df$Percent.White <- (df$White / df$Population) * 100
+df$Percent.Black <- (df$Black / df$Population) * 100
+df$Percent.Hispanic <- (df$Hispanic / df$Population) * 100
+df$Percent.Asian <- (df$Asian / df$Population) * 100
+df$Percent.Native.Hawaiian.Pacific.Islander <- (df$Native.Hawaiian.Pacific.Islander / df$Population) * 100
+df$Percent.American.Indian.Alaskan.Native <- (df$American.Indian.Alaskan.Native / df$Population) * 100
+
+
+# Select numeric columns for PCA
+numeric_data <- df %>%
+  dplyr::select(where(is.numeric)) %>%
+  select(-Broadband.Internet.Access.2019,
+         -Computing.Device.Access.2019,
+         -Gross.Domestic.Product.2021, 
+         -Pre.K.Enrollment.2022,
+         -Uninsured.Residents.2020, 
+         -Food.Insecurity.2021, 
+         -White, -Black, -Hispanic, -American.Indian.Alaskan.Native,
+         -Asian, -Native.Hawaiian.Pacific.Islander, -Multirace)
+
+
+# Standardize the data
+# This step standardizes the data (mean=0, SD=1)
+df_scaled <- scale(numeric_data)
+
+# Run PCA 
+# Perform Principal Component Analysis
+pca_result <- prcomp(df_scaled, center = TRUE, scale = TRUE)
+
+
+# Extract and Analyze Eigenvalues (Variance Explained)
+# Summary of PCA results
+summary(pca_result)
+
+
+```
+
+
+
+## PCA (Variance PLOT)
+
+
+```{r}
+
+# Calculate the variance explained by each PC
+variance_explained <- (pca_result$sdev)^2 / sum((pca_result$sdev)^2)
+
+# Create a Scree Plot
+plot(variance_explained, 
+     type = "b", 
+     main = "Scree Plot: Variance Explained by Principal Components",
+     xlab = "Principal Component", 
+     ylab = "Proportion of Variance Explained",
+     ylim = c(0, max(variance_explained)))
+
+# Cumulative Variance Plot 
+cumulative_variance <- cumsum(variance_explained)
+plot(cumulative_variance, 
+     type = "b", 
+     main = "Cumulative Variance Explained",
+     xlab = "Number of Principal Components", 
+     ylab = "Cumulative Proportion of Variance",
+     ylim = c(0, 1.0))
+
+# 80% threshold
+abline(h = 0.8, col = "red", lty = 2)
+
+```
+
+
+
+```{r}
+
+# Full rotation matrix (Variable Importance)
+loadings_matrix <- pca_result$rotation
+
+# Most important variable for a specific PC (ex: PC1):
+pc1_loadings_abs <- abs(loadings_matrix[, 1])
+top_10_pc1 <- sort(pc1_loadings_abs, decreasing = TRUE)[1:10]
+
+print("Top 10 Variables Defining PC1 (Largest Dimension of Variance):")
+print(top_10_pc1)
+
+```
+
+
+
+```{r}
+
+
+# Find the number of components (K) needed to explain ~90% of the variance
+K_percentile <- which(cumulative_variance >= 0.50)[1]
+
+print(paste("Number of PCs needed to explain ~50% of variance:", K_percentile))
+
+
+# 3. Union-Based Feature Selection
+
+# Define the minimum absolute loading magnitude to consider a variable 'significant'
+loading_threshold <- 0.2
+
+# Get the rotation matrix (loadings) for the top K components
+loadings_matrix <- pca_result$rotation[, 1:K_percentile]
+
+# Initialize an empty set to store the unique variables
+important_variables_union <- c()
+
+# Loop through the top K components
+for (i in 1:K_percentile) {
+    # Extract the loadings for the current PC and take the absolute value
+    pc_loadings <- abs(loadings_matrix[, i])
+    
+    # Find variables whose absolute loading exceeds the threshold
+    significant_vars <- names(pc_loadings[pc_loadings >= loading_threshold])
+    
+    # Add these variables to the union list
+    important_variables_union <- unique(c(important_variables_union, significant_vars))
+}
+
+# Print the final feature set
+print("Final Feature Set (Union of Top Variables from 50% PCs)")
+print(paste("Total Variables Selected:", length(important_variables_union)))
+print(important_variables_union)
+
+```
+
+
+
+
+
+# Spatial Hierarchical Clustering
+
+
+## Define Spatial Penalty
+
+
+```{r}
+
+# Loading Dependencies
+library(spdep)
+library(stats) 
+
+
+
+# Create the curated DataFrame
+df_curated <- df
+
+
+# Align the attribute data order with the spatial data order
+# Obtain NC Counties
+county_names_spatial <- nc_counties[[7]]
+df_ordered <- df_curated %>%
+  inner_join(data.frame(County = county_names_spatial, 
+                        spatial_order = 1:length(county_names_spatial)),
+             by = "County") %>%
+  arrange(spatial_order) %>%
+  select(-spatial_order)
+
+
+# Final Feature Selection (PCA - Derived)
+final_features <- c(
+    # All 29 features from PCA Union
+    "Population.Change.Since.2014", "Broadband.Internet.Access.2022", 
+    "Percent.Children.in.Poverty", "Average.Weekly.Wage", "Per.Capita.Income.2022",
+    "Total.Funding.for.K.12","Educational.Attainment", "Food.Insecurity.2022",
+    "Traditional.Medicaid.Enrollment..", "Medicaid.Expansion.Enrollment..", 
+    "Percent.Asian", "Median.Age", "Taxable.Property.Valuation.Per.Capita",
+    "Hurricane.Risk.Index.Score", "Mountains", "Percent.White", "Percent.Black",
+    "Veteran.Population", "Number.of.Farms", "Area.sq.mi", 
+    "Coastal.Flooding.Risk.Index.Score", "Coastal",
+    "Population", "Computing.Device.Access.2022", "Building.Value",
+    "Population.Under.Age.18", "Population.Aged.65.", 
+    "Auto.Truck.Registrations" , "Primary.Highway.Mileage", "Community.Resilience"          
+    
+    #"Property.Tax.Levy.Per.Capita", "Piedmont" 
+)
+
+
+
+# Extract and standardize the final X data
+X_scaled <- df_ordered %>%
+  select(all_of(final_features)) %>%
+  scale()
+
+
+# Calculate the initial non-spatial Euclidean Distance Matrix (D_Euclidean)
+D_euclidean <- dist(X_scaled, method = "euclidean")
+D_euclidean_matrix <- as.matrix(D_euclidean)
+
+
+# 2. Incorporate and Apply Spatial Constraint
+
+# Convert the neighbor list (nc_neigh) into the Binary Contiguity Matrix (W)
+# nb2mat creates a binary matrix by default.
+W_matrix <- nb2mat(nc_neigh, zero.policy = TRUE) 
+
+# Ensure the diagonal is 0 (a county is not adjacent to itself)
+diag(W_matrix) <- 0
+
+# Create a logical mask: TRUE for NON-CONTIGUOUS pairs (W=0)
+non_contiguous_mask <- (W_matrix == 0)
+
+# Define Penalty Factor (Lambda)
+lambda <- 50 # Adjust this value
+
+# Apply the penalty to create the Spatially Penalized Distance Matrix (D_SPATIAL)
+D_spatial_matrix <- D_euclidean_matrix
+D_spatial_matrix[non_contiguous_mask] <- D_spatial_matrix[non_contiguous_mask] * lambda
+
+# Convert penalized matrix back into a dist object for hclust
+D_spatial <- as.dist(D_spatial_matrix)
+
+```
+
+
+## Hierachical Dendogram
+
+
+```{r}
+
+## Hierachical Dendogram (Revised)
+
+# 3. Analyze Spatially Constrained Clustering
+# Run Hierarchical Clustering (Ward's method)
+spatial_hclust <- hclust(D_spatial, method = "ward.D")
+
+# Choose the final number of COIs (k) by cutting the dendrogram
+k <- 20
+coi_groups <- cutree(spatial_hclust, k = k)
+
+# **[New Step 1]: Attach the COI group to the spatial object ONLY ONCE**
+# Ensure nc_counties_sf is the current spatial object before attaching
+nc_counties_sf$COI_Group <- as.factor(coi_groups)
+
+
+# Final Output: Create a table of County assignments (for verification/report)
+final_coi_assignments <- data.frame(
+    County = df_ordered$County,
+    COI_Group = coi_groups
+)
+
+print(final_coi_assignments)
+
+# Plot the dendrogram (Added horizontal view and cut line for report)
+plot(spatial_hclust,
+    main = "Spatially Constrained Hierarchical Clustering Dendrogram (k=20)",
+     xlab = "Penalized Distance",
+     ylab = "NC Counties",
+     labels = FALSE,
+     hang = -1 )
+
+# Add cut line for visualization
+cut_height <- sort(spatial_hclust$height, 
+                   decreasing = TRUE)[k]
+
+abline(v = cut_height, col = "red", lty = 2, lwd = 2) 
+
+```
+
+
+
+
+```{r}
+
+# Assuming spatial_hclust and coi_groups (1-20) are already defined
+library(dplyr) # Required for the filtering steps
+
+# --- Step 1: Prepare Labels (Find Representatives for ALL 20) ---
+# Create a data frame mapping the leaf index (1-100) to its COI Group ID (1-20)
+hclust_data <- data.frame(
+    index = 1:length(coi_groups),
+    COI_Group = coi_groups
+)
+
+# Find the lowest indexed county for each COI Group (This is the 'representative' branch)
+representative_leaves <- hclust_data %>%
+    group_by(COI_Group) %>%
+    summarise(x_position = min(index)) %>%
+    ungroup()
+
+# --- NEW FILTERING STEP: Select only the labels you want to show ---
+# We will show a well-spaced subset of 5 cluster IDs (1, 5, 10, 15, 20)
+# Adjust this vector if you want different cluster IDs!
+target_ids <- c(1, 10, 15, 18, 20) 
+
+filtered_leaves <- representative_leaves %>%
+    filter(COI_Group %in% target_ids)
+
+# --- Step 2: Plot the Dendrogram (Clean) ---
+
+# Plot the dendrogram with NO labels
+plot(spatial_hclust,
+     main = paste("Spatially Constrained Hierarchical Clustering Dendrogram (k=", k, ")"),
+     xlab = "Dissimilarity (Height)",
+     ylab = "NC Counties",
+     labels = FALSE,                 # Hides all 100 cluttered labels
+     hang = -1
+     )
+
+# Add the cut line
+cut_height <- sort(spatial_hclust$height,
+                   decreasing = TRUE)[k]
+abline(h = cut_height, col = "red", lty = 2, lwd = 2)
+
+# --- Step 3: Add Filtered Cluster IDs (Vertical and Spaced) ---
+
+# Get the labels (1, 5, 10, 15, 20)
+label_text_filtered <- filtered_leaves$COI_Group
+
+# Get the X-positions of the filtered leaves
+x_pos_to_label_filtered <- filtered_leaves$x_position
+
+# Add the text labels manually
+text(x = x_pos_to_label_filtered,  
+     y = 0,               # Y-position is the bottom of the plot
+     labels = label_text_filtered, # The filtered Cluster ID
+     col = "darkblue",
+     cex = 1.0,           # INCREASED font size for visibility
+     srt = 0,            # Rotates text 90 degrees (vertical!)
+     adj = c(1, 1.2)      # Adjusts position slightly above the axis
+     )
+
+# Add a legend
+legend("topright", 
+       legend = c(paste0("Cut at k = ", k), "COI Group ID"), 
+       col = c("red", "darkblue"), 
+       lty = c(2, NA), 
+       pch = c(NA, 15), 
+       lwd = c(2, NA),
+       bty = "n")
+
+
+```
+
+
+
+
+# COI Output Map
+
+
+```{r}
+
+# 1. Prepare Spatial Data
+# Convert to 'sf' object and ensure COI_Group is attached
+#nc_counties_sf <- st_as_sf(nc_counties)
+nc_counties_sf$COI_Group <- as.factor(coi_groups) 
+
+# 2. Compute Centroids for Labeling
+centroids <- st_coordinates(st_centroid(nc_counties_sf$geometry))
+nc_counties_sf$X <- centroids[,1]
+nc_counties_sf$Y <- centroids[,2]
+
+
+# 3. Create the Final Map Visualization
+ggplot(data = nc_counties_sf) +
+  # Map the geometry and fill by the COI_Group factor
+  geom_sf(aes(fill = COI_Group), color = "black", 
+          linewidth = 0.3) +
+# Label the counties with the COI Group ID
+  geom_text(aes(x = X, y = Y, label = COI_Group), 
+            color = "white", size = 2.5, fontface = "bold") +
+  
+  labs(
+    #title = "Spatially Constrained Communities of Interest (COIs)",
+    fill = "COI Group ID"
+  ) +
+  scale_fill_discrete(guide = guide_legend(nrow = 2)) +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+# This .. "should" give desired MAP ?!
+
+```
+
+
+
+```{r}
+
+final_features_Model <- c(
+    # All 30 features from PCA Union
+    "Population.Change.Since.2014", "Broadband.Internet.Access.2022", 
+    "Percent.Children.in.Poverty", "Average.Weekly.Wage", "Per.Capita.Income.2022",
+    "Total.Funding.for.K.12","Educational.Attainment", "Food.Insecurity.2022",
+    "Traditional.Medicaid.Enrollment..", "Medicaid.Expansion.Enrollment..", 
+    "Percent.Asian", "Median.Age", "Taxable.Property.Valuation.Per.Capita",
+    "Hurricane.Risk.Index.Score", "Mountains", "Percent.White", "Percent.Black",
+    "Veteran.Population", "Number.of.Farms", "Area.sq.mi", 
+    "Coastal.Flooding.Risk.Index.Score", "Coastal",
+    "Population", "Computing.Device.Access.2022", "Building.Value",
+    "Population.Under.Age.18", "Population.Aged.65.", 
+    "Auto.Truck.Registrations" , "Primary.Highway.Mileage", "Community.Resilience"          
+)
+
+
+# 2. Combine COI assignments with the original (unscaled) feature values 
+coi_profiling_data <- df_ordered %>%
+    dplyr::select(all_of(final_features_Model))
+
+# Attach the cluster assignment vector (coi_groups, where k=20)
+coi_profiling_data$COI_Group <- coi_groups 
+
+
+# 3. Calculate the mean (profile) for each COI group
+cluster_profile <- coi_profiling_data %>%
+    group_by(COI_Group) %>%
+    # Calculate the mean for every feature, rounded to 2 decimal places
+    summarise(across(everything(), ~ round(median(., na.rm = TRUE), 2)))
+
+
+print("--- Cluster Profile: Mean Values of Features by COI Group (k=20) ---")
+print("This table shows the average value of each of the 30 features for all 20 COI groups.")
+print(cluster_profile)
+
+
+```
+
+
+
+
+# Surrogate Model / COI Score
+
+
+
+```{r}
+
+library(dplyr)
+library(stats)
+
+# 1. Define Index Feature Groups and Polarity based on mapping 
+index_groups <- list(
+    
+    Education = list(c("Educational.Attainment", "Total.Funding.for.K.12"), c()),
+    
+    Healthcare = list(c(), c("Traditional.Medicaid.Enrollment..", "Medicaid.Expansion.Enrollment..")),
+    
+    Economic_Stability = list(c("Average.Weekly.Wage", "Per.Capita.Income.2022", "Building.Value"), c("Percent.Children.in.Poverty")),
+    
+    Sustenance = list(c(), c("Food.Insecurity.2022")),
+    
+    Technology = list(c("Broadband.Internet.Access.2022", "Computing.Device.Access.2022"), c()),
+    
+    Resilience = list(c("Community.Resilience"), c("Hurricane.Risk.Index.Score", "Coastal.Flooding.Risk.Index.Score")),
+    
+    Transportation = list(c("Auto.Truck.Registrations", "Primary.Highway.Mileage"), c()),
+    
+    Built_Environment = list(c("Taxable.Property.Valuation.Per.Capita"), c("Area.sq.mi")),
+    
+    Community_Affil = list(c("Population.Change.Since.2014"), c("Population.Aged.65."))
+)
+
+
+# Identify all unique features needed for the 9 scores
+all_index_features <- unique(unlist(index_groups))
+
+
+# 2. Extract and Standardize All Required Features
+# Ensure df_ordered is the correct ordered data frame
+index_data_raw <- df_ordered %>%
+    dplyr::select(County, all_of(all_index_features))
+
+# Standardize the features (Z-scores: mean=0, SD=1)
+scaled_matrix <- scale(index_data_raw %>% dplyr::select(-County))
+scaled_df <- as.data.frame(scaled_matrix)
+scaled_df$County <- index_data_raw$County # Re-attach County names
+
+
+# 3. Calculate the 9 Composite Scores
+# Initialize the final score table with County and COI Group
+final_determinant_scores <- df_ordered %>%
+    dplyr::select(County) %>%
+    mutate(COI_Group = coi_groups)
+
+# Loop through each determinant to compute score
+for (det_name in names(index_groups)) {
+    group <- index_groups[[det_name]]
+    pos_vars <- group[[1]]
+    neg_vars <- group[[2]]
+    
+    # Calculate the sum of standardized scores for the current determinant
+    scaled_df <- scaled_df %>%
+        mutate(
+            Score_Positive = rowSums(across(all_of(pos_vars), .names = "{col}"), na.rm = TRUE),
+            Score_Negative = rowSums(across(all_of(neg_vars), .names = "{col}"), na.rm = TRUE),
+            # Final Score: Positives minus Negatives
+            !!paste0("Score_", det_name) := Score_Positive - Score_Negative
+        ) %>%
+        dplyr::select(-Score_Positive, -Score_Negative) # Drop intermediate sums
+        
+    # Merge the new score into the final table
+    final_determinant_scores <- final_determinant_scores %>%
+        left_join(scaled_df %>% dplyr::select(County, !!paste0("Score_", det_name)), by = "County")
+}
+
+
+# Final Output
+print("--- 9 Determinant Composite Scores by County (The Surrogate Model) ---")
+print(final_determinant_scores)
+
+#write.csv(final_determinant_scores, "9_Determinant_Composite_Scores.csv", row.names = FALSE)
+
+
+```
+
+
+```{r}
+
+# NOTE: This assumes final_determinant_scores is the dataframe from the 9-score calculation
+
+# Calculate the Grand COI Score by taking the (mean) of the 9 determinant scores.
+final_scores_with_grand <- final_determinant_scores %>%
+    rowwise() %>%
+    mutate(
+        # Select all columns starting with "Score_" and calculate the mean across them
+        Grand_COI_Score = mean(c_across(starts_with("Score_")), na.rm = TRUE)
+    ) %>%
+    ungroup() %>%
+    arrange(desc(Grand_COI_Score))
+
+print("--- County Scores with Final Grand COI Score ---")
+print(final_scores_with_grand)
+
+
+# NOTE: Uses the 'final_scores_with_grand' dataframe created in Step A.
+coi_group_profiles_final <- final_scores_with_grand %>%
+    group_by(COI_Group) %>%
+    # Calculate the MEDIAN for all 9 determinant scores PLUS the Grand Score
+    summarise(across(starts_with("Score_"), ~ round(median(.), 3))) %>%
+    ungroup()
+
+print("--- FINAL COI Group Profile: Median Determinant Scores (k=20) ---")
+print("This is the final table defining the 'personality' of each of your 20 COI groups.")
+print(coi_group_profiles_final)
+#write.csv(coi_group_profiles_final, "FINAL_COI_Group_Profiles.csv", row.names = FALSE)
+
+```
+
+
+
+# Spatial Linear Models
+
+
+```{r}
+
+# We select County, COI_Group, and the Grand_COI_Score
+scores_to_join <- final_scores_with_grand %>%
+    dplyr::select(County, COI_Group, Grand_COI_Score)
+
+# Perform the Left Join
+# This adds the three columns (County, COI_Group, Grand_COI_Score) 
+
+df_final_modeling <- df_ordered %>%
+    left_join(scores_to_join, by = "County")
+
+```
+
+
+
+## Linear Model
+
+
+```{r}
+
+df_lm_input <- df_final_modeling %>%
+    dplyr::select(-County, -COI_Group)
+
+# Linear Model
+NC.lm <- lm(Grand_COI_Score ~ Percent.Children.in.Poverty +
+                                    Educational.Attainment +
+                                    Broadband.Internet.Access.2022 +
+                                    Hurricane.Risk.Index.Score +
+                                    Population.Change.Since.2014 +
+                                    Median.Age,
+            data = df_lm_input)
+
+# View the Result
+summary(NC.lm)
+
+```
+
+
+
+## SAR Model
+
+
+```{r}
+
+# W Matrix (Linear)
+# Neighbors by adjacency and weighting by style 'W'
+col.listw = nb2listw(nc_neigh, style = "W")
+col.listw.sym = similar.listw(col.listw)
+
+W = as.matrix(as_dgRMatrix_listw(col.listw))
+W.sym = as.matrix(as_dgRMatrix_listw(col.listw.sym))
+
+
+# "NAME_2" as the spatial ID ---
+df_sf_modeling_final <- nc_counties_sf %>%
+    left_join(df_final_modeling, by = c("NAME_2" = "County")) 
+
+# SAR Model
+NC.sar <- spautor(
+    Grand_COI_Score ~ Percent.Children.in.Poverty +
+                                    Educational.Attainment +
+                                    Broadband.Internet.Access.2022 +
+                                    Hurricane.Risk.Index.Score +
+                                    Population.Change.Since.2014 +
+                                    Median.Age,
+    data = df_sf_modeling_final, 
+    W=W, spcov_type="sar")
+
+summary(NC.sar)
+
+```
+
+
+## CAR Model
+
+
+```{r}
+
+# CAR Model
+NC.car = spautor(Grand_COI_Score ~ Percent.Children.in.Poverty +
+                                    Educational.Attainment +
+                                    Broadband.Internet.Access.2022 +
+                                    Hurricane.Risk.Index.Score +
+                                    Population.Change.Since.2014 +
+                                    Median.Age,
+    data = df_sf_modeling_final, 
+    W=W.sym, spcov_type="car")
+
+summary(NC.car)
+
+```
+
+
+## Spatial Dependency
+
+
+```{r}
+
+W = nb2listw(nc_neigh, style="W")
+
+lm.morantest(NC.lm, listw = W, alternative="two.sided")
+
+```
+
+
+
+```{r}
+
+colpalette <- viridis_pal(option = "magma")
+colpal_rev <- rev(colpalette(20)) 
+# sequential scheme: light -> low values, dark -> high values
+
+res = resid(NC.lm)
+nc_counties_sf$res = (res - min(res)) / diff(range(res))
+
+
+ggplot(nc_counties_sf) + geom_sf(aes(fill= res)) +
+  theme_bw() + ggtitle("Standardized residuals (OLS Method)") +
+  scale_fill_gradientn(name = "Residuals", colours = colpal_rev,
+                       na.value = "black", limits = c(0,1)) +
+  theme(plot.title = element_text(hjust = 0.5))  # Centers the title
+
+
+```
+
+
+
+## Model Metrics
+
+
+
+```{r}
+
+AIC(NC.car, NC.sar)
+BIC(NC.car, NC.sar)
+
+logLik(NC.car)
+logLik(NC.sar)
+
+```
+
+
+
+
+
+
+## COMPARISON
+
+
+```{r}
+
+betas = matrix(0, 1000, 18)
+
+# Extract coefficients and variances from the models
+lm_coefs = coef(NC.lm)
+lm_vcov = vcov(NC.lm)
+
+sar_coefs = NC.sar$coefficients[[1]]
+sar_vcov = vcov(NC.sar)
+
+car_coefs = NC.car$coefficients[[1]]
+car_vcov = vcov(NC.car)
+
+# Simulate betas for only β1 to β6 across the 3 models
+for (i in 1:6) {
+  betas[, (i - 1) * 3 + 1] = rnorm(1000, sar_coefs[i + 1], sqrt(sar_vcov[i + 1, i + 1]))  # sar model
+  betas[, (i - 1) * 3 + 2] = rnorm(1000, car_coefs[i + 1], sqrt(car_vcov[i + 1, i + 1]))  # car model
+  betas[, (i - 1) * 3 + 3] = rnorm(1000, lm_coefs[i + 1], sqrt(lm_vcov[i + 1, i + 1]))  # lm model
+}
+
+```
+
+
+
+```{r}
+
+# Simulation Plot
+
+layout(matrix(1:6, 2, 3, byrow=TRUE))
+
+boxplot(data.frame(betas[,1:3]), outline=FALSE, names=c("SAR","CAR","SLR"), 
+        main=expression(beta[1] ~ "(% Children in Poverty)"), col=c("lightblue", "lightgreen", "lightpink"))
+
+boxplot(data.frame(betas[,4:6]), outline=FALSE, names=c("SAR","CAR","SLR"), 
+        main=expression(beta[2] ~ "(Educational Attainment)"), col=c("lightblue", "lightgreen", "lightpink"))
+
+boxplot(data.frame(betas[,7:9]), outline=FALSE, names=c("SAR","CAR","SLR"), 
+        main=expression(beta[3] ~ "(Broadband Internet Access)"), col=c("lightblue", "lightgreen", "lightpink"))
+
+boxplot(data.frame(betas[,10:12]), outline=FALSE, names=c("SAR","CAR","SLR"), 
+        main=expression(beta[4] ~ "(Hurricane Risk Index)"), col=c("lightblue", "lightgreen", "lightpink"))
+
+boxplot(data.frame(betas[,13:15]), outline=FALSE, names=c("SAR","CAR","SLR"), 
+        main=expression(beta[5] ~ "(Population Change)"), col=c("lightblue", "lightgreen", "lightpink"))
+
+boxplot(data.frame(betas[,16:18]), outline=FALSE, names=c("SAR","CAR","SLR"), 
+        main=expression(beta[6] ~ "(Median Age)"), col=c("lightblue", "lightgreen", "lightpink"))
+
+
+```
+
+
+
+
+
+
+# Education (Point-Processes)
+
+
+
+```{r}
+
+#Import / Install packages
+packages.list <- c("readr", "tidyr", "haven", "readxl", "ggplot2", "gt",
+                   "gtsummary", "labelled", "MASS", "brant", "corrplot",
+                   "reshape2", "dplyr", "car", "viridis", "sp",
+                   "geoR", "maps", "fields", "mvtnorm", "spmodel", "sf")
+
+
+vapply(packages.list, library, logical(1), logical.return = TRUE, character.only = TRUE)
+
+```
+
+
+
+```{r}
+
+# Read in Data from : https://www.nconemap.gov/
+NC_Higher_Edu <- read_csv("Colleges_and_Universities.csv")
+
+NC_Higher_Edu <- NC_Higher_Edu %>%
+  select(name, city, state, zip, x, y, degree, enroll, naicsdescr) %>%
+  mutate(
+    Enroll_Cat = case_when(
+        enroll >= median(enroll) ~ 1,
+        TRUE ~ 0  ),
+        isCommunity = case_when(
+        naicsdescr == "COMMUNITY COLLEGES" ~ 1,
+        TRUE ~ 0 )
+  )
+
+str(NC_Higher_Edu)
+
+```
+
+
+
+```{r}
+
+library(maps)
+library(spatstat)
+library(splancs)
+
+# NC map polygon
+ncpoly <- map('state', 'north carolina', fill=TRUE, col="transparent", plot=FALSE)
+
+polymap(ncpoly)
+
+```
+
+
+
+```{r}
+
+
+library(maps)
+library(spatstat)
+
+GT_Median <- NC_Higher_Edu[NC_Higher_Edu$Enroll_Cat == 1, 5:6]
+LT_Median <- NC_Higher_Edu[NC_Higher_Edu$Enroll_Cat == 0, 5:6]
+
+polymap(ncpoly)
+pointmap(GT_Median, add=T)
+
+polymap(ncpoly)
+pointmap(LT_Median, add=T)
+
+
+```
+
+
+
+```{r}
+
+# Set up a 1x2 layout (1 row, 2 columns)
+par(mfrow = c(1, 2))
+
+
+# Plot 1: Plot the triangle and add points
+polymap(ncpoly, main = "Enrollments greater than median count", border = "black", 
+        lwd = 2, col = rgb(0.8, 0.8, 0.8, 0.5))
+pointmap(GT_Median, add = TRUE, col = "blue", pch = 19)
+box(lwd = 2)
+
+
+# Plot 2: Plot the triangle and add points
+polymap(ncpoly, main = "Enrollments less than median count", border = "black", 
+        lwd = 2, col = rgb(0.9, 0.9, 0.8, 0.5))
+pointmap(LT_Median, add = TRUE, col = "red", pch = 19)
+box(lwd = 2)
+
+
+# Reset layout to default (single plot)
+par(mfrow = c(1, 1))
+
+```
+
+
+
+
+```{r}
+
+CommunityColl <- NC_Higher_Edu[NC_Higher_Edu$isCommunity == 1, 5:6]
+notComColl <- NC_Higher_Edu[NC_Higher_Edu$isCommunity == 0, 5:6]
+
+polymap(ncpoly)
+pointmap(CommunityColl, add=T)
+
+polymap(ncpoly)
+pointmap(notComColl, add=T)
+
+```
+
+
+
+
+```{r}
+
+# Set up a 1x2 layout
+par(mfrow = c(1, 2))
+
+
+# Plot 1: Plot the triangle and add points
+polymap(ncpoly, main = "Enrollments greater than median count", border = "black", 
+        lwd = 2, col = rgb(0.8, 0.8, 0.8, 0.5))
+pointmap(CommunityColl, add = TRUE, col = "blue", pch = 19)
+box(lwd = 2)
+
+
+# Plot 2: Plot the triangle and add points
+polymap(ncpoly, main = "Enrollments less than median count", border = "black", 
+        lwd = 2, col = rgb(0.9, 0.9, 0.8, 0.5))
+pointmap(notComColl, add = TRUE, col = "red", pch = 19)
+box(lwd = 2)
+
+
+# Reset layout to default (single plot)
+par(mfrow = c(1, 1))
+
+```
+
+
+## Enrollment Investigation
+
+
+
+```{r}
+
+library(maps)
+library(splancs)
+
+```
+
+
+
+```{r}
+
+GM = NC_Higher_Edu[which(NC_Higher_Edu$Enroll_Cat == 1), 5:6]
+ncpoly = map('state', 'north carolina', fill=TRUE, col="transparent", plot=FALSE)
+
+
+GM <- as.points(NC_Higher_Edu[NC_Higher_Edu$Enroll_Cat == 1, 5:6])
+ncpoly <- as.points(ncpoly)
+
+
+
+
+# 1. Ensure the object is a data frame or matrix (if it's not already)
+ncpoly_df <- as.data.frame(ncpoly)
+
+
+# 2. Remove any rows that contain NA values
+ncpoly_clean <- na.omit(ncpoly_df)
+
+ncpoly <- as.points(ncpoly_clean)
+
+
+
+
+b=0.5
+uglamnx=400
+uglamny=400
+uglamest_GM=kernel2d(GM, ncpoly, b, uglamnx, uglamny)
+
+image(uglamest_GM$x,uglamest_GM$y,uglamest_GM$z,asp=1,col=topo.colors(100), 
+      xlab = "Longitude", ylab = "Latitude")
+
+polymap(ncpoly, add = T)
+pointmap(GM, add = T)
+title(main = "Point Pattern of Univeristy Students Greater than \n Median Enrollment in N.C. ")
+
+
+```
+
+
+
+```{r}
+
+h=seq(.1, 1.5, .05)
+ncpoly = map('state', 'north carolina',fill=TRUE,col="transparent",plot=FALSE)
+ncpoly_mat <- na.omit(cbind(as.numeric(ncpoly$x), as.numeric(ncpoly$y)))
+kpts <- khat(GM, ncpoly_mat, h)
+plot(h, kpts, type="l", lwd=1.5, ylab="K")
+points(h, pi*h^2, type='l', col='red')
+legend("topleft", lwd=c(1.5,1),
+col=c("black", "red"),
+legend=c(expression(hat(K)), expression(pi*h^2)))
+
+```
+
+
+
+
+```{r}
+
+LM = NC_Higher_Edu[which(NC_Higher_Edu$Enroll_Cat == 0), 5:6]
+ncpoly = map('state', 'north carolina', fill=TRUE, col="transparent", plot=FALSE)
+
+
+LM <- as.points(NC_Higher_Edu[NC_Higher_Edu$Enroll_Cat == 0, 5:6])
+ncpoly <- as.points(ncpoly)
+
+
+
+
+# 1. Ensure the object is a data frame or matrix (if it's not already)
+ncpoly_df <- as.data.frame(ncpoly)
+
+
+# 2. Remove any rows that contain NA values
+ncpoly_clean <- na.omit(ncpoly_df)
+
+ncpoly <- as.points(ncpoly_clean)
+
+
+
+
+b=0.5
+uglamnx=400
+uglamny=400
+uglamest_LM=kernel2d(LM, ncpoly, b, uglamnx, uglamny)
+
+image(uglamest_LM$x,uglamest_LM$y,uglamest_LM$z,asp=1,col=topo.colors(100), 
+      xlab = "Longitude", ylab = "Latitude")
+
+polymap(ncpoly, add = T)
+pointmap(LM, add = T)
+title(main = "Point Pattern of Univeristy Students Less than \n Median Enrollment in N.C. ")
+
+
+```
+
+
+
+
+```{r}
+
+h=seq(.1, 1.5, .05)
+ncpoly = map('state', 'north carolina',fill=TRUE,col="transparent",plot=FALSE)
+ncpoly_mat <- na.omit(cbind(as.numeric(ncpoly$x), as.numeric(ncpoly$y)))
+kpts <- khat(LM, ncpoly_mat, h)
+plot(h, kpts, type="l", lwd=1.5, ylab="K")
+points(h, pi*h^2, type='l', col='red')
+legend("topleft", lwd=c(1.5,1),
+col=c("black", "red"),
+legend=c(expression(hat(K)), expression(pi*h^2)))
+
+```
+
+
+
+
+
+
+
+
+
+
+## Special Case: Population
+
+
+```{r}
+
+# Linear Model
+NC.lm2 <- lm(Grand_COI_Score ~ Population + Area.sq.mi,
+            data = df_lm_input)
+
+# View the Result
+summary(NC.lm2)
+
+```
+
+
+
+```{r}
+
+lm.morantest(NC.lm2, listw = W, alternative="two.sided")
+
+```
+
+
+```{r}
+
+colpalette <- viridis_pal(option = "magma")
+colpal_rev <- rev(colpalette(20)) 
+# sequential scheme: light -> low values, dark -> high values
+
+res2 = resid(NC.lm2)
+nc_counties_sf$res2 = (res2 - min(res2)) / diff(range(res2))
+
+
+ggplot(nc_counties_sf) + geom_sf(aes(fill= res2)) +
+  theme_bw() + ggtitle("Standardized residuals stratified by Population per Square Mile") +
+  scale_fill_gradientn(name = "Residuals", colours = colpal_rev,
+                       na.value = "black", limits = c(0,1)) +
+  theme(plot.title = element_text(hjust = 0.5))  # Centers the title
+
+
+```
+
+
+
+
